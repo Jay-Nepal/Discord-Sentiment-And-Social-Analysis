@@ -1,7 +1,8 @@
 from interactions import (Client, Intents, listen,
                           slash_command, slash_option, OptionType,
-                          AutoDefer, File, Activity, ActivityType)
-from interactions.api.events import Startup
+                          AutoDefer, File, Activity, ActivityType,
+                          StringSelectMenu, StringSelectOption)
+from interactions.api.events import Startup, Component
 import pandas as pd
 import matplotlib.pyplot as plt
 import io
@@ -37,7 +38,6 @@ def make_social_network_graph(graph, all_relation):
     return buffer
 
 
-# Default startup option. Currently set to check servers the bot is present in
 @listen(Startup)
 async def startup_func():
     await client.change_presence(activity=Activity.create(name='everyone here',
@@ -49,7 +49,40 @@ async def startup_func():
         print(guild.name)
 
 
-@slash_command(name="social_network_graph")
+# Command to bulk delete messages for testing
+@slash_command(name="initial_config", description="Initial configurations for the bot to start reading")
+async def configure(ctx):
+    channel_list = []
+    await AutoDefer.defer(auto_defer_without_ephemeral, ctx)
+    for channel in ctx.guild.channels:
+        if channel.type == 0 and client.user.id in channel.bots:
+            channel_list.append(StringSelectOption(label=f"#{channel.name}", value=channel.id))
+
+    components = StringSelectMenu(channel_list,
+                                  placeholder="Which channels should I work on?",
+                                  min_values=1,
+                                  max_values=len(channel_list)
+                                  )
+    message = await ctx.send('Which channels should I work on?', components=components)
+
+    try:
+        used_component: Component = await client.wait_for_component(components=components, timeout=30)
+    except TimeoutError:
+        await ctx.send('You have timed out, please try running the command again.')
+        components.disabled = True
+        await message.edit(components=components)
+    else:
+        reply_message = "Beginning reading the chat data on: "
+        for chosen_channel in used_component.ctx.values:
+            channel = await client.fetch_channel(int(chosen_channel))
+            reply_message = reply_message + f"#{channel.name} | "
+        components.disabled = True
+        components.placeholder = reply_message
+        await message.edit(components=components)
+        await used_component.ctx.send(reply_message)
+
+
+@slash_command(name="social_network_graph", description="Make a social network graph")
 @slash_option(
     name="channel_id",
     description="ID of the channel to analyse",
