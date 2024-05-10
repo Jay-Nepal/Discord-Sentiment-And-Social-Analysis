@@ -1,7 +1,8 @@
 from interactions import (Client, Intents, listen,
                           slash_command, slash_option, OptionType,
                           AutoDefer, File, Activity, ActivityType,
-                          StringSelectMenu, StringSelectOption)
+                          StringSelectMenu, StringSelectOption,
+                          TimestampStyles)
 from interactions.api.events import Startup, Component
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -9,12 +10,112 @@ import io
 import os
 import networkx as nx
 from dotenv import load_dotenv
+import re
 
 load_dotenv()
 
 # Initial definitions
 client = Client(intents=Intents.ALL)
 auto_defer_without_ephemeral = AutoDefer(enabled=True, ephemeral=False, time_until_defer=2.0)
+message_history = pd.DataFrame()
+
+
+def clean_text(text):
+    # Remove everything between angle brackets (<>) in a string
+    return re.sub(r'<[^>]*>', '', text)
+
+
+@listen(Startup)
+async def startup_func():
+    await client.change_presence(activity=Activity.create(name='everyone here',
+                                                          type=ActivityType(2),
+                                                          state='Everyone is happy :D'
+                                                          ))
+    print("Joined Guilds:")
+    for guild in client.guilds:
+        print(guild.name)
+
+
+# Initial configuration command to start data collection on chosen channels
+@slash_command(name="config_and_collect", description="Initial configurations for the bot and start preparing "
+                                                      "analytics ready dataset")
+async def configure_and_collect(ctx):
+    channel_list = []
+    all_messages = []
+    all_user_pair = []
+
+    await AutoDefer.defer(auto_defer_without_ephemeral, ctx)
+
+    for channel in ctx.guild.channels:
+        if channel.type == 0 and client.user.id in channel.bots:
+            channel_list.append(StringSelectOption(label=f"#{channel.name}", value=channel.id))
+
+    components = StringSelectMenu(channel_list,
+                                  placeholder="Which channels should I work on?",
+                                  min_values=1,
+                                  max_values=len(channel_list)
+                                  )
+    message = await ctx.send('Which channels should I work on?', components=components)
+    channel_list.clear()
+
+    try:
+        used_component: Component = await client.wait_for_component(components=components, timeout=30)
+    except TimeoutError:
+        await ctx.send('You have timed out, please try running the command again.')
+        components.disabled = True
+        await message.edit(components=components)
+    else:
+        reply_message = "Beginning reading the chat data on: "
+        for chosen_channel in used_component.ctx.values:
+            channel = await client.fetch_channel(int(chosen_channel))
+            channel_list.append(channel)
+            reply_message = reply_message + f"#{channel.name} | "
+        components.disabled = True
+        components.placeholder = reply_message
+        await message.edit(components=components)
+        await used_component.ctx.send(reply_message)
+
+    if len(channel_list) > 0:
+        for channel in channel_list:
+            texts = await channel.history(limit=0).flatten()  # Gets all texts from a channel
+            for text in texts:
+                cleaned_text = clean_text(text.content)
+                if 'https' not in cleaned_text and len(cleaned_text) > 0:
+                    message_detail = {
+                        'author': text.author.display_name,
+                        'time-sent': text.timestamp.format()[3:13],
+                        'content': cleaned_text
+                    }
+                    all_messages.append(message_detail)
+
+                mentioned_users = set()
+                author = text.author
+                text_reply_to = text.get_referenced_message()
+                async for user in text.mention_users:
+                    mentioned_users.add(user.display_name)
+                if text_reply_to:
+                    mentioned_users.add(text_reply_to.author.display_name)
+                if len(mentioned_users) > 0:  # Only creating a social pair if there is a sender and receiver
+                    sender = author.display_name
+                    for receiver in mentioned_users:
+                        if receiver != sender:
+                            user_pair = {'sender': sender, 'receiver': receiver}
+                            all_user_pair.append(user_pair)
+
+        df_network = pd.DataFrame(all_user_pair)
+        grouped = df_network.groupby(df_network.columns.difference(['strength']).tolist())
+        df_network['strength'] = grouped.transform('size')
+        df_network = df_network.drop_duplicates().sort_values(by='strength', ascending=False)
+        print(df_network.head(5))
+        df_network.to_excel("pair.xlsx")
+        df_chats = pd.DataFrame(all_messages)
+        print(df_chats.head(5))
+        df_chats.to_excel("chats.xlsx")
+
+        await ctx.send(f'There were a total of {len(df_chats)} messages')
+        await ctx.send(f'The biggest relationship was from {df_network['sender'].iloc[0]} to '
+                       f'{df_network['receiver'].iloc[0]} with {df_network['strength'].iloc[0]} '
+                       f'direct pings in between')
 
 
 def make_social_network_graph(graph, all_relation):
@@ -36,50 +137,6 @@ def make_social_network_graph(graph, all_relation):
     buffer.seek(0)
     plt.close()
     return buffer
-
-
-@listen(Startup)
-async def startup_func():
-    await client.change_presence(activity=Activity.create(name='everyone here',
-                                                          type=ActivityType(2),
-                                                          state='Everyone is happy :D'
-                                                          ))
-    print("Joined Guilds:")
-    for guild in client.guilds:
-        print(guild.name)
-
-
-# Command to bulk delete messages for testing
-@slash_command(name="initial_config", description="Initial configurations for the bot to start reading")
-async def configure(ctx):
-    channel_list = []
-    await AutoDefer.defer(auto_defer_without_ephemeral, ctx)
-    for channel in ctx.guild.channels:
-        if channel.type == 0 and client.user.id in channel.bots:
-            channel_list.append(StringSelectOption(label=f"#{channel.name}", value=channel.id))
-
-    components = StringSelectMenu(channel_list,
-                                  placeholder="Which channels should I work on?",
-                                  min_values=1,
-                                  max_values=len(channel_list)
-                                  )
-    message = await ctx.send('Which channels should I work on?', components=components)
-
-    try:
-        used_component: Component = await client.wait_for_component(components=components, timeout=30)
-    except TimeoutError:
-        await ctx.send('You have timed out, please try running the command again.')
-        components.disabled = True
-        await message.edit(components=components)
-    else:
-        reply_message = "Beginning reading the chat data on: "
-        for chosen_channel in used_component.ctx.values:
-            channel = await client.fetch_channel(int(chosen_channel))
-            reply_message = reply_message + f"#{channel.name} | "
-        components.disabled = True
-        components.placeholder = reply_message
-        await message.edit(components=components)
-        await used_component.ctx.send(reply_message)
 
 
 @slash_command(name="social_network_graph", description="Make a social network graph")
