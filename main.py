@@ -1,6 +1,6 @@
 from interactions import (Client, Intents, listen,
                           slash_command, slash_option, OptionType,
-                          AutoDefer, File)
+                          AutoDefer, File, Activity, ActivityType)
 from interactions.api.events import Startup
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -8,6 +8,7 @@ import io
 import os
 import networkx as nx
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # Initial definitions
@@ -39,6 +40,10 @@ def make_social_network_graph(graph, all_relation):
 # Default startup option. Currently set to check servers the bot is present in
 @listen(Startup)
 async def startup_func():
+    await client.change_presence(activity=Activity.create(name='everyone here',
+                                                          type=ActivityType(2),
+                                                          state='Everyone is happy :D'
+                                                          ))
     print("Joined Guilds:")
     for guild in client.guilds:
         print(guild.name)
@@ -92,6 +97,7 @@ async def fetch_history(ctx, channel_id: str):
     await ctx.send(file=File(buffer, file_name="graph.png"))
     buffer.close()
     await ctx.send('Finished', ephemeral=True)
+
 
 # Command to bulk delete messages for testing
 @slash_command(name="delete_all")
