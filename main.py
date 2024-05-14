@@ -39,7 +39,13 @@ async def startup_func():
 # Initial configuration command to start data collection on chosen channels
 @slash_command(name="config_and_collect", description="Initial configurations for the bot and start preparing "
                                                       "analytics ready dataset")
-async def configure_and_collect(ctx):
+@slash_option(
+    name="export",
+    description="enter 1 if you wish to export, 0 to not",
+    opt_type=OptionType.INTEGER,
+    required=True
+)
+async def configure_and_collect(ctx, export: int):
     channel_list = []
     all_messages = []
     all_user_pair = []
@@ -107,10 +113,15 @@ async def configure_and_collect(ctx):
         df_network['strength'] = grouped.transform('size')
         df_network = df_network.drop_duplicates().sort_values(by='strength', ascending=False)
         print(df_network.head(5))
-        df_network.to_excel("pair.xlsx")
         df_chats = pd.DataFrame(all_messages)
         print(df_chats.head(5))
-        df_chats.to_excel("chats.xlsx")
+
+        if export == 1:
+            await ctx.send('Exporting to pair and chats spreadsheets.')
+            df_network.to_excel("pair.xlsx")
+            df_chats.to_excel("chats.xlsx")
+        else:
+            await ctx.send('Ignoring export, chat data will be stored on cache for analysis within Discord.')
 
         await ctx.send(f'There were a total of {len(df_chats)} messages')
         await ctx.send(f'The biggest relationship was from {df_network['sender'].iloc[0]} to '
